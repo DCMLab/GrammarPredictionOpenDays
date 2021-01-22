@@ -1,0 +1,14 @@
+name = "GrammarPredictionOpenDays"
+uuid = "ff172e03-27d3-487a-b5cb-0c7a2fdc6fc2"
+authors = ["Daniel Harasim <daniel.harasim@epfl.ch>"]
+version = "0.1.0"
+
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+LogProbs = "0810563c-c8a8-53be-b185-e51c33dc41ea"
+Memoize = "c03570c3-d221-55d1-a50c-7939bbd78826"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+Underscores = "d9a01c3f-67ce-4d8c-9b55-35f6e4050bb1"
