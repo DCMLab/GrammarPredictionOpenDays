@@ -3,10 +3,11 @@ module GrammarPredictionOpenDays
 import HTTP, JSON, CSV
 import Base: +, *, zero, one
 
-using LogProbs
+using DataFrames, LogProbs
 using Distributions: Categorical
 using Statistics: mean
 using DataStructures: counter
+using ProgressMeter: @showprogress
 using Underscores: @_
 using Memoize: @memoize
 
@@ -274,36 +275,36 @@ normalize(iter) = collect(iter) ./ sum(iter)
 ### Chord Contexts ###
 ######################
 
-const embedding_contexts = 
-  # stimuli
-  [ ["C^7", "Dm7", "G7", "C^7", "Gm7", "C7"]
-  , ["C^7", "F^7", "Dm7", "Gm7", "C7", "G7"]
-  , ["C^7", "Am7", "Gm7", "C7", "G7", "C^7"]
-  , ["C^7", "Gm7", "C7", "G7", "C^7", "F^7"]
-  , ["C^7", "Gm7", "C7", "G7", "C^7", "Dm7"]
-  # control stimuli
-  , ["C^7", "Gm7", "C7", "G7", "C^7", "Am7"]
-  , ["C^7", "Gm7", "C7", "G7", "C^7", "Em7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Dm7", "G7"]
-  , ["C^7", "Am7", "D7", "Dm7", "G7", "C^7"]
-  , ["C^7", "Gm7", "C7", "F^7", "G7", "C^7"]
-  , ["C^7", "Am7", "Dm7", "G7", "C^7", "F^7"]
-  ]
+# const embedding_contexts = 
+#   # stimuli
+#   [ ["C^7", "Dm7", "G7", "C^7", "Gm7", "C7"]
+#   , ["C^7", "F^7", "Dm7", "Gm7", "C7", "G7"]
+#   , ["C^7", "Am7", "Gm7", "C7", "G7", "C^7"]
+#   , ["C^7", "Gm7", "C7", "G7", "C^7", "F^7"]
+#   , ["C^7", "Gm7", "C7", "G7", "C^7", "Dm7"]
+#   # control stimuli
+#   , ["C^7", "Gm7", "C7", "G7", "C^7", "Am7"]
+#   , ["C^7", "Gm7", "C7", "G7", "C^7", "Em7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Dm7", "G7"]
+#   , ["C^7", "Am7", "D7", "Dm7", "G7", "C^7"]
+#   , ["C^7", "Gm7", "C7", "F^7", "G7", "C^7"]
+#   , ["C^7", "Am7", "Dm7", "G7", "C^7", "F^7"]
+#   ]
 
-const substitution_contexts =
-  [ ["C^7", "Dm7", "G7", "C^7", "Dm7", "G7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Ebm7", "Ab7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Em7", "A7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Fm7", "Bb7"]
-  , ["C^7", "Dm7", "G7", "C^7", "F#m7", "B7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Gm7", "C7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Abm7", "Db7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Am7", "D7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Bbm7", "Eb7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Bm7", "E7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Cm7", "F7"]
-  , ["C^7", "Dm7", "G7", "C^7", "Dbm7", "Gb7"]
-  ]
+# const substitution_contexts =
+#   [ ["C^7", "Dm7", "G7", "C^7", "Dm7", "G7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Ebm7", "Ab7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Em7", "A7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Fm7", "Bb7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "F#m7", "B7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Gm7", "C7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Abm7", "Db7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Am7", "D7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Bbm7", "Eb7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Bm7", "E7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Cm7", "F7"]
+#   , ["C^7", "Dm7", "G7", "C^7", "Dbm7", "Gb7"]
+#   ]
 
 ###################
 ### Application ###
@@ -327,8 +328,8 @@ function mean_random_acc(treebank, i; n_samples=10_000)
 end
 
 function context_predictions(grammar, all_chords, contexts; head="C^7", max_continuation_length=3)
-  @assert 1 == length(unique(length.(contexts)))
-  m = length(contexts[1])
+  @assert 1 == length(unique(length.(contexts.chords)))
+  m = length(contexts.chords[1])
   n = m + max_continuation_length
 
   chart = parse_chart(grammar, inside_score, fill(all_chords, n))
@@ -336,7 +337,7 @@ function context_predictions(grammar, all_chords, contexts; head="C^7", max_cont
   length_marginals = [chart[1,k][head] for k in m:n] / normalizing_const
 
   function calculate_predictions(context)
-    terminalss = [map(t -> [t], context); fill(all_chords, 3)]
+    terminalss = [map(t -> [t], context.chords); fill(all_chords, 3)]
     chart = parse_chart(grammar, inside_score, terminalss)
     joint_probs = [chart[1,k][head] for k in m:n] / normalizing_const
     context_marginal = sum(joint_probs)
@@ -344,7 +345,9 @@ function context_predictions(grammar, all_chords, contexts; head="C^7", max_cont
     length_lilihds = joint_probs ./ length_marginals
     norm_lilihds = normalize(length_lilihds)
 
-    ( context = prod(context .* " ")[1:end-1]
+    ( X = context.id 
+    , stimulus = context.stimulus
+    , context = prod(context.chords .* " ")[1:end-1]
     , posterior0 = float(length_posts[1])
     , posterior1 = float(length_posts[2])
     , posterior2 = float(length_posts[3])
@@ -356,30 +359,37 @@ function context_predictions(grammar, all_chords, contexts; head="C^7", max_cont
     )
   end
 
-  calculate_predictions.(contexts)
+  @showprogress map(calculate_predictions, eachrow(contexts))
 end
 
 function run_main()
   # read and transform treebank data
   treebank_url = "https://raw.githubusercontent.com/DCMLab/JazzHarmonyTreebank/master/treebank.json"
-  contexts = [embedding_contexts; substitution_contexts]
   tunes = HTTP.get(treebank_url).body |> String |> JSON.parse
   treebank = @_ tunes |> filter(haskey(_, "trees"), __) |> map(title_and_tree, __)
   all_chords = unique(chord for tune in treebank for chord in leaflabels(tune.tree))
   full_grammar = treebank_grammar(treebank, all_chords)
+  # read chord sequence contexts form the experiment
+  contexts = select(
+    CSV.read(joinpath(@__DIR__, "..", "data", "Stimuli.csv"), DataFrame),
+    :X => :id, 
+    :Stimulus => :stimulus, 
+    :Progression => (strings -> map(Vector{String} ∘ split, strings)) => :chords)
+  
+  println("\nCalculating treebank prediction accuracies")
+  pred_accs = @showprogress [prediction_acc(treebank, i) for i in eachindex(treebank)] # ~40 sec
+  println("mean prediction accuracy: ", mean(pred_accs), "\n")
 
-  # calculate treebank prediction and baseline accuracies
-  @time pred_accs = [prediction_acc(treebank, i) for i in eachindex(treebank)] # ~40 sec
-  println("mean prediction accuracy: ", mean(pred_accs))
-  @time rand_accs = [mean_random_acc(treebank, i) for i in eachindex(treebank)] # ~100 sec
-  println("mean random baseline accuracy: ", mean(rand_accs))
+  println("Calculating random baseline accuracies")
+  rand_accs = @showprogress [mean_random_acc(treebank, i) for i in eachindex(treebank)] # ~100 sec
+  println("mean random baseline accuracy: ", mean(rand_accs), "\n")
   treebank_results = map(zip(treebank, pred_accs, rand_accs)) do (tune, pred_acc, rand_acc)
     chord_sequence = prod(leaflabels(tune.tree) .* " ")[1:end-1]
     (tune.title, pred_acc=pred_acc, rand_acc=rand_acc, chord_sequence)
   end
   CSV.write(joinpath(@__DIR__, "..", "data", "treebank_results.csv"), treebank_results)
 
-  # calculate context predictions
+  println("Calculating context predictions")
   context_results = context_predictions(full_grammar, all_chords, contexts)
   CSV.write(joinpath(@__DIR__, "..", "data", "context_results.csv"), context_results)
 end
