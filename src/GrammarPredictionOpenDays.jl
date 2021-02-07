@@ -299,7 +299,7 @@ function context_predictions(grammar, all_chords, contexts; head="C^7", max_cont
 
   chart = parse_chart(grammar, inside_score, fill(all_chords, n))
   normalizing_const = sum(chart[1,k][head] for k in m:n)
-  length_marginals = [chart[1,k][head] for k in m:n] / normalizing_const
+  @show length_marginals = [chart[1,k][head] for k in m:n] / normalizing_const
 
   function calculate_predictions(context)
     terminalss = [map(t -> [t], context.chords); fill(all_chords, 3)]
