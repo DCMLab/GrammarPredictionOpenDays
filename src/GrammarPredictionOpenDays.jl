@@ -6,10 +6,11 @@ import Base: +, *, zero, one
 using DataFrames, LogProbs
 using Distributions: Categorical
 using Statistics: mean
-using DataStructures: counter
+using DataStructures: counter, Accumulator, OrderedDict
 using ProgressMeter: @showprogress
 using Underscores: @_
 using Memoize: @memoize
+using NamedArrays
 
 export run_main
 
@@ -250,13 +251,21 @@ function rand_tree(num_leafs)
   end
 end
 
+#############
+### Utils ###
+#############
+
+function title_and_tree(tune)
+  remove_asterisk(label::String) = replace(label, "*" => "")
+  (title = tune["title"], 
+   tree = @_ tune["trees"][1]["open_constituent_tree"] |> dict2tree(remove_asterisk, __))
+end
+
+normalize(iter) = collect(iter) ./ sum(iter)
+
 #############################################
 ### Strictly Right-Branching Binary Trees ###
 #############################################
-
-# treebank_url = "https://raw.githubusercontent.com/DCMLab/JazzHarmonyTreebank/master/treebank.json"
-# tunes = HTTP.get(treebank_url).body |> String |> JSON.parse
-# treebank = @_ tunes |> filter(haskey(_, "trees"), __) |> map(title_and_tree, __)
 
 function strictly_right_branching_tree(n_leafs)
   dummy_label = nothing
@@ -272,17 +281,67 @@ function strictly_right_branching_baseline(tree::Tree)
   tree_similarity(tree, strictly_right_branching_tree(n_leafs))
 end
 
-#############
-### Utils ###
-#############
+####################
+### Bigram Model ###
+####################
 
-function title_and_tree(tune)
-  remove_asterisk(label::String) = replace(label, "*" => "")
-  (title = tune["title"], 
-   tree = @_ tune["trees"][1]["open_constituent_tree"] |> dict2tree(remove_asterisk, __))
+const end_of_seq = "END"
+
+bigrams(vec) = collect(zip(vec[1:end-1], vec[2:end]))
+
+function bigram_prob_table(seqs)
+  all_chords = unique(chord for seq in seqs for chord in seq)
+  bigrams_from_all_sequences = reduce(vcat, bigrams([seq; end_of_seq]) for seq in seqs)
+
+  smoothed_counts = 
+    NamedArray(
+      fill(0.1, length(all_chords), length(all_chords)+1), 
+      (all_chords, [all_chords; end_of_seq]),
+      (:first, :second))
+  for (a, b) in bigrams_from_all_sequences
+    smoothed_counts[a, b] += 1
+  end
+
+  probs = deepcopy(smoothed_counts)
+  for i in 1:size(probs)[1]
+    probs[i,:] = normalize(probs[i,:])
+  end
+  LogProb.(probs)
 end
 
-normalize(iter) = collect(iter) ./ sum(iter)
+function bigram_continuation_length_probs(probs, context; final_chord="C^7")
+  bigram_prob(probs, seq) = prod(bg -> probs[bg[1], bg[2]], bigrams(seq))
+
+  all_chords = names(probs, 1)
+
+  all_continuations = 
+    let conts = Vector{typeof(context)}[]
+      # length 0 continuation
+      if context == final_chord
+        push!(conts, [context, end_of_seq])
+      end
+      # length 1 continuation
+      push!(conts, [context, final_chord, end_of_seq])
+      for c1 in all_chords
+        # length 2 continuations
+        push!(conts, [context, c1, final_chord, end_of_seq])
+        for c2 in all_chords
+          # length 3 continuations
+          push!(conts, [context, c1, c2, final_chord, end_of_seq])
+        end
+      end
+      conts
+    end
+  
+  continuation_probs = normalize([bigram_prob(probs, cont) for cont in all_continuations])
+  length_probs = OrderedDict(l => zero(LogProb) for l in 0:3)
+  for k in eachindex(all_continuations)
+    l = length(all_continuations[k]) - 2
+    p = continuation_probs[k]
+    length_probs[l] += p
+  end
+  length_probs
+end
 
 #############
 ### Tests ###
@@ -317,14 +376,19 @@ function mean_random_acc(treebank, i; n_samples=10_000)
   mean(tree_similarity(tree, rand_tree(num_leafs)) for _ in 1:n_samples)
 end
 
-function context_predictions(grammar, all_chords, contexts; head="C^7", max_continuation_length=3)
+function context_predictions(treebank, all_chords, contexts; head="C^7")
   @assert 1 == length(unique(length.(contexts.chords)))
   m = length(contexts.chords[1])
+  max_continuation_length = 3
   n = m + max_continuation_length
 
+  grammar = treebank_grammar(treebank, all_chords)
   chart = parse_chart(grammar, inside_score, fill(all_chords, n))
   normalizing_const = sum(chart[1,k][head] for k in m:n)
   @show length_marginals = [chart[1,k][head] for k in m:n] / normalizing_const
+
+  seqs = [leaflabels(tune.tree) for tune in treebank]
+  bigram_probs = bigram_prob_table(seqs)
 
   function calculate_predictions(context)
     terminalss = [map(t -> [t], context.chords); fill(all_chords, 3)]
@@ -334,6 +398,9 @@ function context_predictions(grammar, all_chords, contexts; head="C^7", max_cont
     length_posts = joint_probs / context_marginal # == normalize(joint_probs)
     length_lilihds = joint_probs ./ length_marginals
     norm_lilihds = normalize(length_lilihds)
+
+    bigram_length_probs = 
+      bigram_continuation_length_probs(bigram_probs, context.chords[end], final_chord=head)
 
     ( X = context.id 
     , stimulus = context.stimulus
@@ -346,6 +413,10 @@ function context_predictions(grammar, all_chords, contexts; head="C^7", max_cont
     , normedlilihd1 = float(norm_lilihds[2])
     , normedlilihd2 = float(norm_lilihds[3])
     , normedlilihd3 = float(norm_lilihds[4])
+    , bigram0 = float(bigram_length_probs[0])
+    , bigram1 = float(bigram_length_probs[1])
+    , bigram2 = float(bigram_length_probs[2])
+    , bigram3 = float(bigram_length_probs[3])
     )
   end
 
@@ -358,7 +429,7 @@ function run_main()
   tunes = HTTP.get(treebank_url).body |> String |> JSON.parse
   treebank = @_ tunes |> filter(haskey(_, "trees"), __) |> map(title_and_tree, __)
   all_chords = unique(chord for tune in treebank for chord in leaflabels(tune.tree))
-  full_grammar = treebank_grammar(treebank, all_chords)
+
   # read chord sequence contexts form the experiment
   contexts = select(
     CSV.read(joinpath(@__DIR__, "..", "data", "Stimuli.csv"), DataFrame),
@@ -381,7 +452,7 @@ function run_main()
   CSV.write(joinpath(@__DIR__, "..", "data", "treebank_results.csv"), treebank_results)
 
   println("Calculating context predictions")
-  context_results = context_predictions(full_grammar, all_chords, contexts)
+  context_results = context_predictions(treebank, all_chords, contexts)
   CSV.write(joinpath(@__DIR__, "..", "data", "context_results.csv"), context_results)
 end
 
