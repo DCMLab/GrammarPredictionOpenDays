@@ -13,6 +13,9 @@ using Memoize: @memoize
 
 export run_main
 
+import Random
+Random.seed!(1234)
+
 #############
 ### Trees ###
 #############
@@ -247,6 +250,28 @@ function rand_tree(num_leafs)
   end
 end
 
+#############################################
+### Strictly Right-Branching Binary Trees ###
+#############################################
+
+# treebank_url = "https://raw.githubusercontent.com/DCMLab/JazzHarmonyTreebank/master/treebank.json"
+# tunes = HTTP.get(treebank_url).body |> String |> JSON.parse
+# treebank = @_ tunes |> filter(haskey(_, "trees"), __) |> map(title_and_tree, __)
+
+function strictly_right_branching_tree(n_leafs)
+  dummy_label = nothing
+  if n_leafs == 1
+    Leaf(dummy_label)
+  else
+    Binary(dummy_label, strictly_right_branching_tree(n_leafs - 1), Leaf(dummy_label))
+  end
+end
+
+function strictly_right_branching_baseline(tree::Tree)
+  n_leafs = tree |> leaflabels |> length
+  tree_similarity(tree, strictly_right_branching_tree(n_leafs))
+end
+
 #############
 ### Utils ###
 #############
@@ -348,9 +373,10 @@ function run_main()
   println("Calculating random baseline accuracies")
   rand_accs = @showprogress [mean_random_acc(treebank, i) for i in eachindex(treebank)] # ~100 sec
   println("mean random baseline accuracy: ", mean(rand_accs), "\n")
-  treebank_results = map(zip(treebank, pred_accs, rand_accs)) do (tune, pred_acc, rand_acc)
+  right_branching_accs = [strictly_right_branching_baseline(tune.tree) for tune in treebank]
+  treebank_results = map(zip(treebank, pred_accs, rand_accs, right_branching_accs)) do (tune, pred_acc, rand_acc, rb_acc)
     chord_sequence = prod(leaflabels(tune.tree) .* " ")[1:end-1]
-    (tune.title, pred_acc=pred_acc, rand_acc=rand_acc, chord_sequence)
+    (tune.title, pred_acc=pred_acc, rand_acc=rand_acc, right_branching_acc=rb_acc, chord_sequence)
   end
   CSV.write(joinpath(@__DIR__, "..", "data", "treebank_results.csv"), treebank_results)
 
